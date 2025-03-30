@@ -10,14 +10,26 @@ grades_data = [
     {"Grade": "117A", "Minimum": 41600, "Midpoint": 55500, "Maximum": 69700},
 ]
 
-# Convert to DataFrame
 grades_df = pd.DataFrame(grades_data)
 
-# Step 2: Define simulation parameters
-annual_increase_rate = 0.02  # 2% increase each year
-years_to_simulate = 5
+# Step 2: Define performance scores (you can customize these)
+# Example: 5-year performance scores for all employees
+performance_scores = [3, 3, 3, 3, 3]  # You can modify this list
 
-# Step 3: Check salary projection and whether it exceeds bands.
+# Validate input
+if len(performance_scores) != 5:
+    raise ValueError("You must provide exactly 5 performance scores (one per year).")
+
+# Step 3: Map scores to percentage increases
+score_increase = {
+    1: 0.00,
+    2: 0.01,
+    3: 0.02,
+    4: 0.025,
+    5: 0.03
+}
+
+# Step 4: Simulate salary projection and band exceeding check
 projection_results = []
 
 for _, row in grades_df.iterrows():
@@ -27,9 +39,13 @@ for _, row in grades_df.iterrows():
     exceeded_year = None
     salary_progression = []
 
-    for year in range(1, years_to_simulate + 1):
-        current_salary *= (1 + annual_increase_rate)
-        salary_progression.append(round(current_salary, 2))
+    for year in range(1, 6):
+        score = performance_scores[year - 1]
+        increase_rate = score_increase.get(score, 0.00)
+        current_salary *= (1 + increase_rate)
+        current_salary = round(current_salary, 2)
+        salary_progression.append(current_salary)
+
         if exceeded_year is None and current_salary > max_salary:
             exceeded_year = year
 
@@ -45,6 +61,6 @@ for _, row in grades_df.iterrows():
         "Exceeded Year": exceeded_year if exceeded_year else "Within Range"
     })
 
-# Step 4: Display results
+# Step 5: Display results
 results_df = pd.DataFrame(projection_results)
 print(results_df)
