@@ -78,7 +78,6 @@ def evaluate_employees():
             if exceeded_year is None and salary > max_salary:
                 exceeded_year = year
 
-        # Project assuming minimum score of 3 for future (if any score missing or to fulfill requirement)
         projected_salary = emp[3]  # current salary
         projected_exceed_year = None
         for year in range(1, 6):
@@ -91,6 +90,26 @@ def evaluate_employees():
         results.append((name, grade, *progression, exceeded_year if exceeded_year else "Within Range", projected_exceed_year if projected_exceed_year else "Never"))
 
     return results
+
+# Calculate total combined budget per year using actual scores
+def calculate_combined_budget():
+    employees = fetch_employees()
+    yearly_totals = [0] * 5
+    for emp in employees:
+        salary = emp[3]
+        scores = emp[4:9]  # score_y1 to score_y5
+        for i, score in enumerate(scores):
+            raise_pct = score_increase.get(score, 0.02)
+            salary *= (1 + raise_pct)
+            salary = round(salary, 2)
+            yearly_totals[i] += salary
+    return yearly_totals
+
+def show_salary_budget():
+    totals = calculate_combined_budget()
+    message = "Combined Salary Budget (Based on Actual Scores):\n"
+    message += "\n".join([f"Year {i+1}: ${totals[i]:,.2f}" for i in range(5)])
+    messagebox.showinfo("Salary Budget Forecast", message)
 
 # Handle form submission
 def submit_form():
@@ -131,9 +150,25 @@ def submit_form():
 def display_records():
     for row in tree.get_children():
         tree.delete(row)
+
     for emp in fetch_employees():
         emp_id, name, grade, salary, y1, y2, y3, y4, y5 = emp
-        tree.insert("", tk.END, values=(emp_id, name, grade, salary, y1, y2, y3, y4, y5))
+        max_salary = grades_df.loc[grade]["Maximum"]
+        sal = salary
+        exceeded_year = None
+
+        for i, score in enumerate([y1, y2, y3, y4, y5], start=1):
+            raise_pct = score_increase.get(score, 0.02)
+            sal *= (1 + raise_pct)
+            sal = round(sal, 2)
+            if exceeded_year is None and sal > max_salary:
+                exceeded_year = i
+
+        tag = "exceeded" if exceeded_year else "normal"
+        tree.insert("", tk.END, values=(emp_id, name, grade, salary, y1, y2, y3, y4, y5, max_salary, exceeded_year if exceeded_year else "Within Range"), tags=(tag,))
+
+    tree.tag_configure("exceeded", background="#fdd")
+    tree.tag_configure("normal", background="#dfd")
 
 def show_evaluations():
     eval_win = tk.Toplevel(root)
@@ -168,7 +203,6 @@ name_entry.grid(row=0, column=1)
 grade_entry.grid(row=1, column=1)
 salary_entry.grid(row=2, column=1)
 
-# Properly space score entries
 for i, entry in enumerate(score_entries):
     entry.grid(row=3, column=i + 1, padx=2)
 
@@ -178,21 +212,20 @@ submit_btn.grid(row=4, column=0, columnspan=2, pady=5)
 eval_btn = tk.Button(root, text="Show Salary Projections", command=show_evaluations)
 eval_btn.grid(row=4, column=2, columnspan=2, pady=5)
 
-cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5")
+budget_btn = tk.Button(root, text="Show Combined Budget", command=show_salary_budget)
+budget_btn.grid(row=4, column=4, columnspan=2, pady=5)
 
-# Create frame to contain the Treeview and scrollbar
+cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5", "Max Band", "Exceeded Year")
+
 tree_frame = tk.Frame(root)
 tree_frame.grid(row=5, column=0, columnspan=7, pady=10)
 
-# Add horizontal scrollbar
 x_scroll = tk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
 x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
 
-# Create Treeview
 tree = ttk.Treeview(tree_frame, columns=cols, show='headings', xscrollcommand=x_scroll.set)
 x_scroll.config(command=tree.xview)
 
-# Setup headings and column widths
 for col in cols:
     tree.heading(col, text=col)
     tree.column(col, width=100, anchor='center')
