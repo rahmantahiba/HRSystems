@@ -1,6 +1,13 @@
+import sqlite3
+import tkinter as tk
+from tkinter import messagebox, ttk
 import pandas as pd
+import pathlib
 
-# Static A-band salary data
+# Set database file path
+database_file = pathlib.Path("employee_performance.db")
+
+# Grade band definitions
 grades_data = [
     {"Grade": "112A", "Minimum": 32240, "Midpoint": 34600, "Maximum": 43700},
     {"Grade": "113A", "Minimum": 32240, "Midpoint": 38000, "Maximum": 48000},
@@ -9,73 +16,188 @@ grades_data = [
     {"Grade": "116A", "Minimum": 38000, "Midpoint": 50600, "Maximum": 63700},
     {"Grade": "117A", "Minimum": 41600, "Midpoint": 55500, "Maximum": 69700},
 ]
+grades_df = pd.DataFrame(grades_data).set_index("Grade")
+score_increase = {1: 0.00, 2: 0.01, 3: 0.02, 4: 0.025, 5: 0.03}
 
-# Score to increase rate mapping
-score_increase = {
-    1: 0.00,
-    2: 0.01,
-    3: 0.02,
-    4: 0.025,
-    5: 0.03
-}
+# Create SQLite database and table
+def create_database():
+    conn = sqlite3.connect(database_file)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        grade TEXT NOT NULL,
+        current_salary REAL NOT NULL,
+        score_y1 INTEGER,
+        score_y2 INTEGER,
+        score_y3 INTEGER,
+        score_y4 INTEGER,
+        score_y5 INTEGER
+    )
+    """)
+    conn.commit()
+    conn.close()
 
+# Insert employee record
+def insert_employee(name, grade, salary, scores):
+    conn = sqlite3.connect(database_file)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO employees (name, grade, current_salary, score_y1, score_y2, score_y3, score_y4, score_y5)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (name, grade, salary, *scores))
+    conn.commit()
+    conn.close()
 
-def simulate_grade_progression(performance_scores):
-    """
-    Simulates salary progression for each A-grade over 5 years given performance scores.
+# Fetch all records for display
+def fetch_employees():
+    conn = sqlite3.connect(database_file)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM employees")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
-    Args:
-        performance_scores (list): List of 5 performance scores (1–5 scale)
+# Evaluate performance and return a list of results
+def evaluate_employees():
+    employees = fetch_employees()
+    results = []
 
-    Returns:
-        pd.DataFrame: Salary projections and exceeded year information
-    """
-    if len(performance_scores) != 5:
-        raise ValueError("You must provide exactly 5 performance scores (one per year).")
-
-    grades_df = pd.DataFrame(grades_data)
-    projection_results = []
-
-    for _, row in grades_df.iterrows():
-        grade = row["Grade"]
-        max_salary = row["Maximum"]
-        current_salary = row["Midpoint"]
+    for emp in employees:
+        emp_id, name, grade, salary, *scores = emp
+        max_salary = grades_df.loc[grade]["Maximum"]
         exceeded_year = None
-        salary_progression = []
+        progression = []
 
-        for year in range(1, 6):
-            score = performance_scores[year - 1]
-            increase_rate = score_increase.get(score, 0.00)
-            current_salary *= (1 + increase_rate)
-            current_salary = round(current_salary, 2)
-            salary_progression.append(current_salary)
-
-            if exceeded_year is None and current_salary > max_salary:
+        for year, score in enumerate(scores, start=1):
+            raise_pct = score_increase.get(score, 0.02)
+            salary *= (1 + raise_pct)
+            salary = round(salary, 2)
+            progression.append(salary)
+            if exceeded_year is None and salary > max_salary:
                 exceeded_year = year
 
-        projection_results.append({
-            "Grade": grade,
-            "Initial Midpoint": row["Midpoint"],
-            "Max Salary": max_salary,
-            "Year 1": salary_progression[0],
-            "Year 2": salary_progression[1],
-            "Year 3": salary_progression[2],
-            "Year 4": salary_progression[3],
-            "Year 5": salary_progression[4],
-            "Exceeded Year": exceeded_year if exceeded_year else "Within Range"
-        })
+        # Project assuming minimum score of 3 for future (if any score missing or to fulfill requirement)
+        projected_salary = emp[3]  # current salary
+        projected_exceed_year = None
+        for year in range(1, 6):
+            projected_salary *= (1 + score_increase[3])
+            projected_salary = round(projected_salary, 2)
+            if projected_exceed_year is None and projected_salary > max_salary:
+                projected_exceed_year = year
+                break
 
-    return pd.DataFrame(projection_results)
+        results.append((name, grade, *progression, exceeded_year if exceeded_year else "Within Range", projected_exceed_year if projected_exceed_year else "Never"))
 
-def main():
-    # Define the performance scores for 5 years
-    performance_scores = [3, 3, 3, 3, 3]  # Modify this list as needed
+    return results
 
-    # Run the simulation
-    results_df = simulate_grade_progression(performance_scores)
+# Handle form submission
+def submit_form():
+    name = name_entry.get()
+    grade = grade_entry.get().strip().upper()
 
-    # Print the result
-    print("\nSalary Projection Based on Performance Scores:")
-    print(results_df)
+    if grade not in grades_df.index:
+        messagebox.showerror("Invalid Grade", f"Grade '{grade}' is not recognized.\nValid options: {', '.join(grades_df.index)}")
+        return
 
-main()
+    try:
+        salary = float(salary_entry.get())
+    except ValueError:
+        messagebox.showerror("Invalid Salary", "Please enter a numeric value for salary.")
+        return
+
+    try:
+        scores = []
+        for i, entry in enumerate(score_entries):
+            val = entry.get()
+            if val == "":
+                raise ValueError(f"Score Y{i+1} is missing.")
+            score = int(val)
+            if score not in score_increase:
+                raise ValueError(f"Score Y{i+1} must be 1 through 5.")
+            scores.append(score)
+    except ValueError as e:
+        messagebox.showerror("Invalid Score Input", str(e))
+        return
+
+    insert_employee(name, grade, salary, scores)
+    messagebox.showinfo("Success", f"Record for {name} added!")
+    for entry in [name_entry, grade_entry, salary_entry] + score_entries:
+        entry.delete(0, tk.END)
+    display_records()
+
+# Display records in the UI
+def display_records():
+    for row in tree.get_children():
+        tree.delete(row)
+    for emp in fetch_employees():
+        emp_id, name, grade, salary, y1, y2, y3, y4, y5 = emp
+        tree.insert("", tk.END, values=(emp_id, name, grade, salary, y1, y2, y3, y4, y5))
+
+def show_evaluations():
+    eval_win = tk.Toplevel(root)
+    eval_win.title("Salary Projections")
+    cols = ("Name", "Grade", "Y1", "Y2", "Y3", "Y4", "Y5", "Exceeded Year", "Min Score 3 Exceed Year")
+    eval_tree = ttk.Treeview(eval_win, columns=cols, show='headings')
+    for col in cols:
+        eval_tree.heading(col, text=col)
+    eval_tree.pack(fill='both', expand=True)
+
+    for row in evaluate_employees():
+        eval_tree.insert("", tk.END, values=row)
+
+# Initialize DB
+create_database()
+
+# Build Tkinter UI
+root = tk.Tk()
+root.title("Employee Performance Database")
+
+tk.Label(root, text="Name").grid(row=0, column=0)
+tk.Label(root, text="Grade").grid(row=1, column=0)
+tk.Label(root, text="Current Salary").grid(row=2, column=0)
+tk.Label(root, text="Scores (Y1-Y5)").grid(row=3, column=0)
+
+name_entry = tk.Entry(root)
+grade_entry = tk.Entry(root)
+salary_entry = tk.Entry(root)
+score_entries = [tk.Entry(root, width=4) for _ in range(5)]
+
+name_entry.grid(row=0, column=1)
+grade_entry.grid(row=1, column=1)
+salary_entry.grid(row=2, column=1)
+
+# Properly space score entries
+for i, entry in enumerate(score_entries):
+    entry.grid(row=3, column=i + 1, padx=2)
+
+submit_btn = tk.Button(root, text="Add Employee", command=submit_form)
+submit_btn.grid(row=4, column=0, columnspan=2, pady=5)
+
+eval_btn = tk.Button(root, text="Show Salary Projections", command=show_evaluations)
+eval_btn.grid(row=4, column=2, columnspan=2, pady=5)
+
+cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5")
+
+# Create frame to contain the Treeview and scrollbar
+tree_frame = tk.Frame(root)
+tree_frame.grid(row=5, column=0, columnspan=7, pady=10)
+
+# Add horizontal scrollbar
+x_scroll = tk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+
+# Create Treeview
+tree = ttk.Treeview(tree_frame, columns=cols, show='headings', xscrollcommand=x_scroll.set)
+x_scroll.config(command=tree.xview)
+
+# Setup headings and column widths
+for col in cols:
+    tree.heading(col, text=col)
+    tree.column(col, width=100, anchor='center')
+
+tree.pack(fill='both', expand=True)
+
+display_records()
+root.mainloop()
