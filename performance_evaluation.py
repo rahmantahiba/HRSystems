@@ -19,7 +19,8 @@ grades_data = [
 grades_df = pd.DataFrame(grades_data).set_index("Grade")
 score_increase = {1: 0.00, 2: 0.01, 3: 0.02, 4: 0.025, 5: 0.03}
 
-# Create SQLite database and table
+# --- Database Functions ---
+
 def create_database():
     conn = sqlite3.connect(database_file)
     cur = conn.cursor()
@@ -39,7 +40,6 @@ def create_database():
     conn.commit()
     conn.close()
 
-# Insert employee record
 def insert_employee(name, grade, salary, scores):
     conn = sqlite3.connect(database_file)
     cur = conn.cursor()
@@ -50,7 +50,6 @@ def insert_employee(name, grade, salary, scores):
     conn.commit()
     conn.close()
 
-# Fetch all records for display
 def fetch_employees():
     conn = sqlite3.connect(database_file)
     cur = conn.cursor()
@@ -59,7 +58,8 @@ def fetch_employees():
     conn.close()
     return rows
 
-# Evaluate performance and return a list of results
+# --- Data Processing ---
+
 def evaluate_employees():
     employees = fetch_employees()
     results = []
@@ -78,7 +78,7 @@ def evaluate_employees():
             if exceeded_year is None and salary > max_salary:
                 exceeded_year = year
 
-        projected_salary = emp[3]  # current salary
+        projected_salary = emp[3]
         projected_exceed_year = None
         for year in range(1, 6):
             projected_salary *= (1 + score_increase[3])
@@ -91,13 +91,12 @@ def evaluate_employees():
 
     return results
 
-# Calculate total combined budget per year using actual scores
 def calculate_combined_budget():
     employees = fetch_employees()
     yearly_totals = [0] * 5
     for emp in employees:
         salary = emp[3]
-        scores = emp[4:9]  # score_y1 to score_y5
+        scores = emp[4:9]
         for i, score in enumerate(scores):
             raise_pct = score_increase.get(score, 0.02)
             salary *= (1 + raise_pct)
@@ -105,13 +104,76 @@ def calculate_combined_budget():
             yearly_totals[i] += salary
     return yearly_totals
 
-def show_salary_budget():
-    totals = calculate_combined_budget()
-    message = "Combined Salary Budget (Based on Actual Scores):\n"
-    message += "\n".join([f"Year {i+1}: ${totals[i]:,.2f}" for i in range(5)])
-    messagebox.showinfo("Salary Budget Forecast", message)
+# --- CSV I/O ---
 
-# Handle form submission
+def export_to_csv():
+    employees = fetch_employees()
+    df = pd.DataFrame(employees, columns=["ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5"])
+    try:
+        df.to_csv("employee_export.csv", index=False)
+        messagebox.showinfo("Export Successful", "Data exported to 'employee_export.csv'")
+    except Exception as e:
+        messagebox.showerror("Export Failed", str(e))
+
+def import_from_csv():
+    try:
+        df = pd.read_csv("employee_export.csv")
+        for _, row in df.iterrows():
+            insert_employee(
+                row["Name"],
+                row["Grade"],
+                row["Salary"],
+                [row["Y1"], row["Y2"], row["Y3"], row["Y4"], row["Y5"]]
+            )
+        messagebox.showinfo("Import Successful", "Data imported from 'employee_export.csv'")
+        display_records()
+    except Exception as e:
+        messagebox.showerror("Import Failed", str(e))
+
+# --- UI Functions ---
+
+def show_salary_budget():
+    selected = tree.selection()
+
+    if selected:
+        # Show total for selected employee
+        emp = tree.item(selected[0])['values']
+        name = emp[1]
+        salary = float(emp[3])
+        scores = list(map(int, emp[4:9]))  # Y1-Y5 scores
+
+        total = salary
+        for score in scores:
+            raise_pct = score_increase.get(score, 0.02)
+            total *= (1 + raise_pct)
+            total = round(total, 2)
+
+        message = f"Projected 5-Year Total Salary for {name}:\n${total:,.2f}"
+        messagebox.showinfo("Employee Salary Projection", message)
+
+    else:
+        # Fallback to show total for all employees
+        totals = calculate_combined_budget()
+        message = "Combined Salary Budget (All Employees):\n"
+        message += "\n".join([f"Year {i + 1}: ${totals[i]:,.2f}" for i in range(5)])
+        messagebox.showinfo("Combined Budget Forecast", message)
+
+def delete_selected_employee():
+    selected = tree.selection()
+    if not selected:
+        messagebox.showwarning("No Selection", "Please select a row to delete.")
+        return
+    emp_id = tree.item(selected[0])['values'][0]
+    confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete Employee ID {emp_id}?")
+    if confirm:
+        conn = sqlite3.connect(database_file)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
+        conn.commit()
+        conn.close()
+        display_records()
+        messagebox.showinfo("Deleted", f"Employee ID {emp_id} deleted.")
+
 def submit_form():
     name = name_entry.get()
     grade = grade_entry.get().strip().upper()
@@ -127,15 +189,9 @@ def submit_form():
         return
 
     try:
-        scores = []
-        for i, entry in enumerate(score_entries):
-            val = entry.get()
-            if val == "":
-                raise ValueError(f"Score Y{i+1} is missing.")
-            score = int(val)
-            if score not in score_increase:
-                raise ValueError(f"Score Y{i+1} must be 1 through 5.")
-            scores.append(score)
+        scores = [int(entry.get()) for entry in score_entries]
+        if any(score not in score_increase for score in scores):
+            raise ValueError("Scores must be between 1 and 5.")
     except ValueError as e:
         messagebox.showerror("Invalid Score Input", str(e))
         return
@@ -146,7 +202,6 @@ def submit_form():
         entry.delete(0, tk.END)
     display_records()
 
-# Display records in the UI
 def display_records():
     for row in tree.get_children():
         tree.delete(row)
@@ -164,11 +219,57 @@ def display_records():
             if exceeded_year is None and sal > max_salary:
                 exceeded_year = i
 
-        tag = "exceeded" if exceeded_year else "normal"
-        tree.insert("", tk.END, values=(emp_id, name, grade, salary, y1, y2, y3, y4, y5, max_salary, exceeded_year if exceeded_year else "Within Range"), tags=(tag,))
+        flag = "✓ Within Band"
+        if exceeded_year:
+            flag = "⚠ Exceeded Band"
+        elif round(sal, 2) == max_salary:
+            flag = "⚠ At Band Limit"
 
-    tree.tag_configure("exceeded", background="#fdd")
-    tree.tag_configure("normal", background="#dfd")
+        tag = "exceeded" if flag != "✓ Within Band" else "normal"
+
+        tree.insert("", tk.END, values=(
+            emp_id, name, grade, salary, y1, y2, y3, y4, y5,
+            max_salary, exceeded_year if exceeded_year else "—", flag
+        ), tags=(tag,))
+
+    tree.tag_configure("exceeded", background="#ffe6e6")
+    tree.tag_configure("normal", background="#e6ffe6")
+
+def search_employees(query):
+    for row in tree.get_children():
+        tree.delete(row)
+
+    for emp in fetch_employees():
+        emp_id, name, grade, salary, y1, y2, y3, y4, y5 = emp
+        if query.lower() not in name.lower():
+            continue
+
+        max_salary = grades_df.loc[grade]["Maximum"]
+        sal = salary
+        exceeded_year = None
+
+        for i, score in enumerate([y1, y2, y3, y4, y5], start=1):
+            raise_pct = score_increase.get(score, 0.02)
+            sal *= (1 + raise_pct)
+            sal = round(sal, 2)
+            if exceeded_year is None and sal > max_salary:
+                exceeded_year = i
+
+        flag = "✓ Within Band"
+        if exceeded_year:
+            flag = "⚠ Exceeded Band"
+        elif round(sal, 2) == max_salary:
+            flag = "⚠ At Band Limit"
+
+        tag = "exceeded" if flag != "✓ Within Band" else "normal"
+
+        tree.insert("", tk.END, values=(
+            emp_id, name, grade, salary, y1, y2, y3, y4, y5,
+            max_salary, exceeded_year if exceeded_year else "—", flag
+        ), tags=(tag,))
+
+    tree.tag_configure("exceeded", background="#ffe6e6")
+    tree.tag_configure("normal", background="#e6ffe6")
 
 def show_evaluations():
     eval_win = tk.Toplevel(root)
@@ -182,10 +283,9 @@ def show_evaluations():
     for row in evaluate_employees():
         eval_tree.insert("", tk.END, values=row)
 
-# Initialize DB
-create_database()
+# --- Build UI ---
 
-# Build Tkinter UI
+create_database()
 root = tk.Tk()
 root.title("Employee Performance Database")
 
@@ -202,23 +302,37 @@ score_entries = [tk.Entry(root, width=4) for _ in range(5)]
 name_entry.grid(row=0, column=1)
 grade_entry.grid(row=1, column=1)
 salary_entry.grid(row=2, column=1)
-
 for i, entry in enumerate(score_entries):
     entry.grid(row=3, column=i + 1, padx=2)
 
 submit_btn = tk.Button(root, text="Add Employee", command=submit_form)
-submit_btn.grid(row=4, column=0, columnspan=2, pady=5)
+submit_btn.grid(row=4, column=0, pady=5)
 
 eval_btn = tk.Button(root, text="Show Salary Projections", command=show_evaluations)
-eval_btn.grid(row=4, column=2, columnspan=2, pady=5)
+eval_btn.grid(row=4, column=1, pady=5)
 
 budget_btn = tk.Button(root, text="Show Combined Budget", command=show_salary_budget)
-budget_btn.grid(row=4, column=4, columnspan=2, pady=5)
+budget_btn.grid(row=4, column=2, pady=5)
 
-cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5", "Max Band", "Exceeded Year")
+delete_btn = tk.Button(root, text="Delete Selected", command=delete_selected_employee)
+delete_btn.grid(row=4, column=3, pady=5)
+
+import_btn = tk.Button(root, text="Import CSV", command=import_from_csv)
+import_btn.grid(row=4, column=5, pady=5)
+
+export_btn = tk.Button(root, text="Export CSV", command=export_to_csv)
+export_btn.grid(row=4, column=6, pady=5)
+
+tk.Label(root, text="Search Name:").grid(row=4, column=7, padx=5)
+search_entry = tk.Entry(root)
+search_entry.grid(row=4, column=8)
+search_btn = tk.Button(root, text="Search", command=lambda: search_employees(search_entry.get()))
+search_btn.grid(row=4, column=9, padx=5)
+
+cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5", "Max Band", "Exceeded Year", "Flag")
 
 tree_frame = tk.Frame(root)
-tree_frame.grid(row=5, column=0, columnspan=7, pady=10)
+tree_frame.grid(row=7, column=0, columnspan=7, pady=10)
 
 x_scroll = tk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
 x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
