@@ -1,6 +1,7 @@
-Class: MGIS 350 
-Project: HR Systems
-Group #2 
+## General Information
+- **Class:** MGIS 350 
+- **Project:** HR Systems
+- Group #2 
 
 ## Members 
 - Tahiba Rahman
