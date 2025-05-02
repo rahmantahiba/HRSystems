@@ -34,7 +34,8 @@ def create_database():
         score_y2 INTEGER,
         score_y3 INTEGER,
         score_y4 INTEGER,
-        score_y5 INTEGER
+        score_y5 INTEGER,
+        UNIQUE(name, grade)
     )
     """)
     conn.commit()
@@ -43,12 +44,14 @@ def create_database():
 def insert_employee(name, grade, salary, scores):
     conn = sqlite3.connect(database_file)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO employees (name, grade, current_salary, score_y1, score_y2, score_y3, score_y4, score_y5)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (name, grade, salary, *scores))
-    conn.commit()
-    conn.close()
+    try:
+        cur.execute("""
+            INSERT INTO employees (name, grade, current_salary, score_y1, score_y2, score_y3, score_y4, score_y5)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, grade, salary, *scores))
+        conn.commit()
+    finally:
+        conn.close()
 
 def fetch_employees():
     conn = sqlite3.connect(database_file)
@@ -118,15 +121,27 @@ def export_to_csv():
 def import_from_csv():
     try:
         df = pd.read_csv("employee_export.csv")
+        added = 0
+        skipped = 0
+        existing = {(emp[1].strip().lower(), emp[2].strip().upper()) for emp in fetch_employees()}
+
         for _, row in df.iterrows():
+            key = (row["Name"].strip().lower(), row["Grade"].strip().upper())
+            if key in existing:
+                skipped += 1
+                continue
+
             insert_employee(
                 row["Name"],
                 row["Grade"],
                 row["Salary"],
                 [row["Y1"], row["Y2"], row["Y3"], row["Y4"], row["Y5"]]
             )
-        messagebox.showinfo("Import Successful", "Data imported from 'employee_export.csv'")
+            added += 1
+            existing.add(key)  # So future rows in the same CSV aren't inserted twice
+
         display_records()
+        messagebox.showinfo("Import Complete", f"Added: {added} entries\nSkipped: {skipped} duplicates.")
     except Exception as e:
         messagebox.showerror("Import Failed", str(e))
 
@@ -159,24 +174,34 @@ def show_salary_budget():
         messagebox.showinfo("Combined Budget Forecast", message)
 
 def delete_selected_employee():
-    selected = tree.selection()
-    if not selected:
-        messagebox.showwarning("No Selection", "Please select a row to delete.")
+    selected_items = tree.selection()
+    if not selected_items:
+        messagebox.showwarning("No Selection", "Please select one or more rows to delete.")
         return
-    emp_id = tree.item(selected[0])['values'][0]
-    confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete Employee ID {emp_id}?")
-    if confirm:
-        conn = sqlite3.connect(database_file)
-        cur = conn.cursor()
+
+    confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete {len(selected_items)} selected record(s)?")
+    if not confirm:
+        return
+
+    conn = sqlite3.connect(database_file)
+    cur = conn.cursor()
+    for item in selected_items:
+        emp_id = tree.item(item)['values'][0]
         cur.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
-        conn.commit()
-        conn.close()
-        display_records()
-        messagebox.showinfo("Deleted", f"Employee ID {emp_id} deleted.")
+    conn.commit()
+    conn.close()
+    display_records()
+    messagebox.showinfo("Deleted", f"{len(selected_items)} record(s) deleted.")
 
 def submit_form():
     name = name_entry.get()
     grade = grade_entry.get().strip().upper()
+
+    employees = fetch_employees()
+    for emp in employees:
+        if emp[1].strip().lower() == name.strip().lower() and emp[2].strip().upper() == grade:
+            messagebox.showerror("Duplicate Entry", f"Employee '{name}' with Grade '{grade}' already exists.")
+            return
 
     if grade not in grades_df.index:
         messagebox.showerror("Invalid Grade", f"Grade '{grade}' is not recognized.\nValid options: {', '.join(grades_df.index)}")
@@ -184,23 +209,21 @@ def submit_form():
 
     try:
         salary = float(salary_entry.get())
-    except ValueError:
-        messagebox.showerror("Invalid Salary", "Please enter a numeric value for salary.")
-        return
-
-    try:
         scores = [int(entry.get()) for entry in score_entries]
         if any(score not in score_increase for score in scores):
             raise ValueError("Scores must be between 1 and 5.")
     except ValueError as e:
-        messagebox.showerror("Invalid Score Input", str(e))
+        messagebox.showerror("Invalid Input", str(e))
         return
 
-    insert_employee(name, grade, salary, scores)
-    messagebox.showinfo("Success", f"Record for {name} added!")
-    for entry in [name_entry, grade_entry, salary_entry] + score_entries:
-        entry.delete(0, tk.END)
-    display_records()
+    try:
+        insert_employee(name, grade, salary, scores)
+        messagebox.showinfo("Success", f"Record for {name} added!")
+        for entry in [name_entry, grade_entry, salary_entry] + score_entries:
+            entry.delete(0, tk.END)
+        display_records()
+    except sqlite3.IntegrityError:
+        messagebox.showerror("Database Error", f"Employee '{name}' with Grade '{grade}' already exists.")
 
 def display_records():
     for row in tree.get_children():
@@ -288,56 +311,73 @@ def show_evaluations():
 create_database()
 root = tk.Tk()
 root.title("Employee Performance Database")
+root.geometry("1000x650")          # Initial size
+root.minsize(900, 600)             # Minimum size to ensure layout fits on smaller screens
 
-tk.Label(root, text="Name").grid(row=0, column=0)
-tk.Label(root, text="Grade").grid(row=1, column=0)
-tk.Label(root, text="Current Salary").grid(row=2, column=0)
-tk.Label(root, text="Scores (Y1-Y5)").grid(row=3, column=0)
+form_frame = tk.Frame(root)
+form_frame.grid(row=0, column=0, columnspan=10, sticky="w", padx=10, pady=5)
 
-name_entry = tk.Entry(root)
-grade_entry = tk.Entry(root)
-salary_entry = tk.Entry(root)
-score_entries = [tk.Entry(root, width=4) for _ in range(5)]
+tk.Label(form_frame, text="Name").grid(row=0, column=0, sticky="w")
+name_entry = tk.Entry(form_frame)
+name_entry.grid(row=0, column=1, padx=5)
 
-name_entry.grid(row=0, column=1)
-grade_entry.grid(row=1, column=1)
-salary_entry.grid(row=2, column=1)
+tk.Label(form_frame, text="Grade").grid(row=1, column=0, sticky="w")
+grade_entry = tk.Entry(form_frame)
+grade_entry.grid(row=1, column=1, padx=5)
+
+tk.Label(form_frame, text="Current Salary").grid(row=2, column=0, sticky="w")
+salary_entry = tk.Entry(form_frame)
+salary_entry.grid(row=2, column=1, padx=5)
+
+tk.Label(form_frame, text="Scores (Y1–Y5)").grid(row=3, column=0, sticky="w")
+
+scores_frame = tk.Frame(form_frame)
+scores_frame.grid(row=3, column=1, sticky="w", padx=(5, 0))  # << Add this padx
+
+score_entries = [tk.Entry(scores_frame, width=4) for _ in range(5)]
 for i, entry in enumerate(score_entries):
-    entry.grid(row=3, column=i + 1, padx=2)
+    entry.grid(row=0, column=i, padx=4)
 
-submit_btn = tk.Button(root, text="Add Employee", command=submit_form)
-submit_btn.grid(row=4, column=0, pady=5)
+# Create a centered button frame
+button_frame = tk.Frame(root)
+button_frame.grid(row=4, column=0, columnspan=10, pady=10)
 
-eval_btn = tk.Button(root, text="Show Salary Projections", command=show_evaluations)
-eval_btn.grid(row=4, column=1, pady=5)
+submit_btn = tk.Button(button_frame, text="Add Employee", command=submit_form)
+submit_btn.pack(side=tk.LEFT, padx=10)
 
-budget_btn = tk.Button(root, text="Show Combined Budget", command=show_salary_budget)
-budget_btn.grid(row=4, column=2, pady=5)
+eval_btn = tk.Button(button_frame, text="Show Salary Projections", command=show_evaluations)
+eval_btn.pack(side=tk.LEFT, padx=10)
 
-delete_btn = tk.Button(root, text="Delete Selected", command=delete_selected_employee)
-delete_btn.grid(row=4, column=3, pady=5)
+budget_btn = tk.Button(button_frame, text="Show Combined Budget", command=show_salary_budget)
+budget_btn.pack(side=tk.LEFT, padx=10)
 
-import_btn = tk.Button(root, text="Import CSV", command=import_from_csv)
-import_btn.grid(row=4, column=5, pady=5)
+delete_btn = tk.Button(button_frame, text="Delete Selected", command=delete_selected_employee)
+delete_btn.pack(side=tk.LEFT, padx=10)
 
-export_btn = tk.Button(root, text="Export CSV", command=export_to_csv)
-export_btn.grid(row=4, column=6, pady=5)
+import_btn = tk.Button(button_frame, text="Import CSV", command=import_from_csv)
+import_btn.pack(side=tk.LEFT, padx=10)
 
-tk.Label(root, text="Search Name:").grid(row=4, column=7, padx=5)
-search_entry = tk.Entry(root)
-search_entry.grid(row=4, column=8)
-search_btn = tk.Button(root, text="Search", command=lambda: search_employees(search_entry.get()))
-search_btn.grid(row=4, column=9, padx=5)
+export_btn = tk.Button(button_frame, text="Export CSV", command=export_to_csv)
+export_btn.pack(side=tk.LEFT, padx=10)
+
+tk.Label(button_frame, text="Search Name:").pack(side=tk.LEFT, padx=5)
+search_entry = tk.Entry(button_frame, width=15)
+search_entry.pack(side=tk.LEFT, padx=5)
+
+search_btn = tk.Button(button_frame, text="Search", command=lambda: search_employees(search_entry.get()))
+search_btn.pack(side=tk.LEFT, padx=5)
 
 cols = ("ID", "Name", "Grade", "Salary", "Y1", "Y2", "Y3", "Y4", "Y5", "Max Band", "Exceeded Year", "Flag")
 
 tree_frame = tk.Frame(root)
-tree_frame.grid(row=7, column=0, columnspan=7, pady=10)
+tree_frame.grid(row=7, column=0, columnspan=10, pady=10, sticky="nsew")
+root.grid_rowconfigure(7, weight=1)
+root.grid_columnconfigure(0, weight=1)
 
 x_scroll = tk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
 x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
 
-tree = ttk.Treeview(tree_frame, columns=cols, show='headings', xscrollcommand=x_scroll.set)
+tree = ttk.Treeview(tree_frame, columns=cols, show='headings', xscrollcommand=x_scroll.set, selectmode="extended")
 x_scroll.config(command=tree.xview)
 
 for col in cols:
