@@ -3,11 +3,43 @@ from tkinter import ttk, messagebox
 import subprocess
 import sys
 import pathlib
+import sqlite3
 
 # Import modules but don't run their main code automatically
 # We'll use function calls instead of directly importing the modules
 import importlib.util
 
+import os
+
+if os.path.exists("employees.db"):
+    os.remove("employees.db")
+
+# Recreate the database with correct schema
+conn = sqlite3.connect("employees.db")
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        grade TEXT,
+        salary REAL
+    )
+""")
+conn.commit()
+conn.close()
+
+def update_employees_db_from_csv(df):
+    conn = sqlite3.connect("employees.db")
+    cursor = conn.cursor()
+
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT OR REPLACE INTO employees (id, name, grade, salary)
+            VALUES (?, ?, ?, ?)
+        """, (row["ID"], row["Name"], row["Grade"], row["Salary"]))
+
+    conn.commit()
+    conn.close()
 
 def import_module(module_name):
     """Import a module by name without running its main code"""
@@ -49,9 +81,29 @@ def ensure_pandas_installed():
             messagebox.showwarning("Exiting", "This program requires 'pandas'. Exiting.")
             sys.exit(1)
 
-
 ensure_pandas_installed()
+import pandas as pd
 
+def ensure_employees_table_has_columns():
+    try:
+        conn = sqlite3.connect("employees.db")
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(employees)")
+        columns = [col[1] for col in cursor.fetchall()]
+
+        if "salary" not in columns:
+            cursor.execute("ALTER TABLE employees ADD COLUMN salary REAL")
+            print("Added 'salary' column to employees table.")
+
+        if "grade" not in columns:
+            cursor.execute("ALTER TABLE employees ADD COLUMN grade TEXT")
+            print("Added 'grade' column to employees table.")
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Error updating table schema:", e)
 
 class HRPerformanceEvaluatorApp:
     def __init__(self, root):
@@ -129,6 +181,65 @@ class HRPerformanceEvaluatorApp:
             command=self.open_help,
             width=10
         ).pack()
+
+    @staticmethod
+    def salary_projection():
+        GROWTH_RATE = 0.02
+        YEARS = 6
+        GRADES_MAX = {
+            "112A": 43700,
+            "113A": 48000,
+            "114A": 52500,
+            "115A": 57600,
+            "116A": 63700,
+            "117A": 69700,
+        }
+
+        def get_maximum(grade):
+            return GRADES_MAX.get(grade, float("inf"))
+
+        salary_projection_employees = []
+        salary_projection_total = [0.0 for _ in range(YEARS)]
+
+        try:
+            conn = sqlite3.connect("employees.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, grade, salary FROM employees")
+            rows = cursor.fetchall()
+            print(f"Rows fetched: {rows}")  # <--- Add this line
+        except Exception as e:
+            print("DB Error:", e)
+            return [], []
+
+        for row in rows:
+            try:
+                emp_id, name, grade, salary = row
+                current_salary = float(salary)
+                max_band = get_maximum(grade)
+            except Exception as e:
+                print(f"Skipping invalid row: {e}")
+                continue
+
+            projection = ["Did not exceed band", emp_id, name, grade]
+            yearly = [round(current_salary, 2)]
+            salary_projection_total[0] += yearly[0]
+
+            exceeded = False
+            for year in range(1, YEARS):
+                if not exceeded:
+                    current_salary *= (1 + GROWTH_RATE)
+                    current_salary = round(current_salary, 2)
+                    if current_salary > max_band:
+                        exceeded = True
+                        projection[0] = f"Band exceeded in year {year}"
+                yearly.append(current_salary)
+                salary_projection_total[year] += current_salary
+
+            projection.extend(yearly)
+            salary_projection_employees.append(projection)
+
+        conn.close()
+        return salary_projection_employees, salary_projection_total
 
     def open_add_edit_employee(self):
         print("Opening Employee Manager")  # Debug
@@ -222,116 +333,259 @@ class HRPerformanceEvaluatorApp:
 
     def open_salary_forecast(self):
         print("Opening Salary Forecast")  # Debug
-        hr_evaluator = import_module("hr_performance_evaluator")
-        if hr_evaluator:
-            hr_evaluator.show_salary_projection()
+        employee_data, totals = HRPerformanceEvaluatorApp.salary_projection()
+
+        # Create a new window
+        window = tk.Toplevel(self.root)
+        window.title("Salary Forecast")
+        window.geometry("1100x600")
+        window.configure(bg="#f0f4f8")
+
+        # Title label
+        tk.Label(
+            window,
+            text="Employee Salary Forecast",
+            font="Helvetica 16 bold",
+            bg="#f0f4f8"
+        ).pack(pady=10)
+
+        # Table setup
+        columns = ["status", "id", "name", "grade", "year_0", "year_1", "year_2", "year_3", "year_4", "year_5"]
+        headers = ["Status", "ID", "Name", "Grade", "Year 0", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5"]
+
+        tree = ttk.Treeview(window, columns=columns, show="headings", height=20)
+        tree.pack(padx=20, pady=10, fill="x")
+
+        for col, header in zip(columns, headers):
+            tree.heading(col, text=header)
+            tree.column(col, width=100, anchor=tk.CENTER)
+
+        # Insert data rows
+        for emp in employee_data:
+            row = emp[:4] + [f"${val:,.2f}" for val in emp[4:]]
+            tree.insert("", "end", values=row)
+
+        # Total per year
+        totals_frame = tk.Frame(window, bg="#f0f4f8")
+        totals_frame.pack(pady=5)
+        tk.Label(
+            totals_frame,
+            text="Total Salary per Year:",
+            font="Helvetica 11 bold",
+            bg="#f0f4f8"
+        ).grid(row=0, column=0, sticky="w", padx=10)
+
+        for i, total in enumerate(totals):
+            tk.Label(
+                totals_frame,
+                text=f"Year {i}: ${total:,.2f}",
+                bg="#f0f4f8"
+            ).grid(row=i + 1, column=0, sticky="w", padx=20)
+
+        # Footer note
+        tk.Label(
+            window,
+            text="*Note: Current salary is considered Year 0",
+            font="Helvetica 9 italic",
+            bg="#f0f4f8",
+            fg="#333333"
+        ).pack(pady=10, anchor="w", padx=20)
 
     def open_band_limits(self):
         print("Opening Band Limits")  # Debug
         salary_proj = import_module("Salary_Projections")
-        if salary_proj:
-            window = tk.Toplevel(self.root)
-            window.title("Salary Projections Report")
-            window.geometry("1200x600")
-            window.configure(bg="#f0f4f8")
+        print("salary_proj =", salary_proj)  # Debug if import failed
 
-            tk.Label(window, text="Employee Salary Projections", font="Helvetica 16 bold", bg="#f0f4f8").pack(pady=10)
+        if not salary_proj:
+            messagebox.showerror("Import Error", "Could not load Salary_Projections module.")
+            return
 
-            columns = ["status", "id", "name", "grade", "year_0", "year_1", "year_2", "year_3", "year_4", "year_5"]
-            tree = ttk.Treeview(window, columns=columns, show="headings", height=20)
-            tree.pack(padx=20, pady=10, fill="x")
+        window = tk.Toplevel(self.root)
+        window.title("Salary Projections Report")
+        window.geometry("1200x600")
+        window.configure(bg="#f0f4f8")
 
-            headers = ["Status", "ID", "Name", "Grade", "Year 0", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5"]
-            for col, header in zip(columns, headers):
-                tree.heading(col, text=header)
-                tree.column(col, width=100, anchor=tk.CENTER)
+        tk.Label(window, text="Employee Salary Projections", font="Helvetica 16 bold", bg="#f0f4f8").pack(pady=10)
 
+        columns = ["status", "id", "name", "grade", "year_0", "year_1", "year_2", "year_3", "year_4", "year_5"]
+        headers = ["Status", "ID", "Name", "Grade", "Year 0", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5"]
+
+        tree = ttk.Treeview(window, columns=columns, show="headings", height=20)
+        tree.pack(padx=20, pady=10, fill="x")
+
+        for col, header in zip(columns, headers):
+            tree.heading(col, text=header)
+            tree.column(col, width=100, anchor=tk.CENTER)
+
+        try:
             employee_data, totals = salary_proj.salary_projection()
-            if employee_data:
-                for emp in employee_data:
-                    row = emp[:4] + [f"${val:,.2f}" for val in emp[4:]]
-                    tree.insert("", "end", values=row)
+            print("Employee Data:", employee_data)  # Debug data returned
+        except Exception as e:
+            messagebox.showerror("Projection Error", f"An error occurred during salary projection:\n{e}")
+            return
 
-                # Totals Display
-                totals_frame = tk.Frame(window, bg="#f0f4f8")
-                totals_frame.pack(pady=5)
-                tk.Label(totals_frame, text="Total Salary per Year:", font="Helvetica 11 bold", bg="#f0f4f8").grid(
-                    row=0, column=0, sticky="w", padx=10)
+        if not employee_data:
+            messagebox.showinfo("No Data", "No employee salary data found to display.")
+            return
 
-                for i, total in enumerate(totals):
-                    tk.Label(totals_frame, text=f"Year {i}: ${total:,.2f}", bg="#f0f4f8").grid(row=i + 1, column=0,
-                                                                                               sticky="w", padx=20)
+        for emp in employee_data:
+            try:
+                row = emp[:4] + [f"${val:,.2f}" for val in emp[4:]]
+                tree.insert("", "end", values=row)
+            except Exception as e:
+                print(f"Error inserting row {emp}: {e}")
 
-                # Footnote
-                tk.Label(window, text="*Note: Current salary is considered Year 0", font="Helvetica 9 italic",
-                         bg="#f0f4f8", fg="#333333").pack(pady=10, anchor="w", padx=20)
+        # Totals
+        totals_frame = tk.Frame(window, bg="#f0f4f8")
+        totals_frame.pack(pady=5)
+        tk.Label(totals_frame, text="Total Salary per Year:", font="Helvetica 11 bold", bg="#f0f4f8").grid(row=0,
+                                                                                                           column=0,
+                                                                                                           sticky="w",
+                                                                                                           padx=10)
+
+        for i, total in enumerate(totals):
+            tk.Label(totals_frame, text=f"Year {i}: ${total:,.2f}", bg="#f0f4f8").grid(row=i + 1, column=0, sticky="w",
+                                                                                       padx=20)
+
+        tk.Label(window, text="*Note: Current salary is considered Year 0", font="Helvetica 9 italic",
+                 bg="#f0f4f8", fg="#333333").pack(pady=10, anchor="w", padx=20)
 
     def open_generate_report(self):
-        print("Opening Generate Report")  # Debug
-        annual_report = import_module("Annual_Historical_Report")
-        if annual_report:
-            window = tk.Toplevel(self.root)
-            window.title("Salary Forecast Report")
-            window.geometry("1000x600")
-            window.configure(bg="#f0f4f8")
+        print("Opening Generate Report")
 
-            # Title
-            tk.Label(window, text="Annual Salary Forecast Report", font="Montserrat 16 bold", bg="#f0f4f8",
-                     fg="#000000").grid(row=0, column=0, columnspan=5, pady=10)
+        grade_bands = {
+            "112A": 43700,
+            "113A": 48000,
+            "114A": 52500,
+            "115A": 57600,
+            "116A": 63700,
+            "117A": 69700,
+        }
+        forecasted_scores_dict = {}
 
-            # Treeview 1: Current Employee Info
-            tk.Label(window, text="Employee Information", font="Helvetica 12 bold", bg="#f0f4f8").grid(row=1, column=0,
-                                                                                                       columnspan=2,
-                                                                                                       sticky=tk.W,
-                                                                                                       padx=10)
-            tree_info = ttk.Treeview(window, columns=("id", "name", "grade", "current_salary"), show="headings",
-                                     height=15)
-            tree_info.grid(row=2, column=0, columnspan=2, padx=10, sticky=tk.W)
+        conn = sqlite3.connect("employees.db")
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, grade, salary FROM employees;")
+        records = cur.fetchall()
+        conn.close()
 
-            for col, width in zip(["id", "name", "grade", "current_salary"], [50, 150, 80, 120]):
-                tree_info.heading(col, text=col.replace("_", " ").title())
-                tree_info.column(col, width=width)
+        window = tk.Toplevel(self.root)
+        window.title("Salary Forecast Report")
+        window.geometry("1000x600")
+        window.configure(bg="#f0f4f8")
 
-            # Treeview 2: Forecast Info
-            tk.Label(window, text="Forecast Report", font="Helvetica 12 bold", bg="#f0f4f8").grid(row=1, column=2,
-                                                                                                  columnspan=2,
-                                                                                                  sticky=tk.W)
-            tree_forecast = ttk.Treeview(window, columns=(
+        # Title
+        tk.Label(window, text="Annual Salary Forecast Report", font="Montserrat 16 bold", bg="#f0f4f8",
+                 fg="#000000").grid(row=0, column=0, columnspan=5, pady=10)
+
+        # Treeview 1: Employee Info
+        tk.Label(window, text="Employee Information", font="Helvetica 12 bold", bg="#f0f4f8").grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=10)
+        tree_info = ttk.Treeview(window, columns=("id", "name", "grade", "current_salary"), show="headings", height=15)
+        tree_info.grid(row=2, column=0, columnspan=2, padx=10, sticky="w")
+        for col, width in zip(["id", "name", "grade", "current_salary"], [50, 150, 80, 120]):
+            tree_info.heading(col, text=col.replace("_", " ").title())
+            tree_info.column(col, width=width)
+
+        # Treeview 2: Forecast Info
+        tk.Label(window, text="Forecast Report", font="Helvetica 12 bold", bg="#f0f4f8").grid(
+            row=1, column=2, columnspan=2, sticky="w")
+        tree_forecast = ttk.Treeview(window, columns=(
             "forecasted_score", "forecasted_salary", "last_year_forecasted_salary", "exceeds_maximum"), show="headings",
-                                         height=15)
-            tree_forecast.grid(row=2, column=2, columnspan=2, padx=10, sticky=tk.W)
+                                     height=15)
+        tree_forecast.grid(row=2, column=2, columnspan=2, padx=10, sticky="w")
+        for col, width in zip(
+                ["forecasted_score", "forecasted_salary", "last_year_forecasted_salary", "exceeds_maximum"],
+                [120, 140, 170, 120]):
+            header = "Last Year's Forecasted Salary" if col == "last_year_forecasted_salary" else col.replace("_",
+                                                                                                              " ").title()
+            tree_forecast.heading(col, text=header)
+            tree_forecast.column(col, width=width)
 
-            for col, width in zip(
-                    ["forecasted_score", "forecasted_salary", "last_year_forecasted_salary", "exceeds_maximum"],
-                    [120, 140, 170, 120]):
-                if col == "last_year_forecasted_salary":
-                    tree_forecast.heading(col, text="Last Year's Forecasted Salary")
-                else:
-                    tree_forecast.heading(col, text=col.replace("_", " ").title())
-                tree_forecast.column(col, width=width)
+        # Entry for year
+        tk.Label(window, text="Forecast Year:", bg="#f0f4f8").grid(row=3, column=0, sticky="e", padx=5)
+        year_var = tk.StringVar(value="1")
+        tk.Entry(window, textvariable=year_var, width=5).grid(row=3, column=1, sticky="w")
 
-            # Controls
-            tk.Label(window, text="Forecast Year:", bg="#f0f4f8").grid(row=3, column=0, sticky=tk.E, padx=5)
-            year_var = tk.StringVar()
-            tk.Entry(window, textvariable=year_var, width=5).grid(row=3, column=1, sticky=tk.W)
+        def generate_report():
+            year_str = year_var.get().strip()
+            if not year_str.isdigit() or int(year_str) < 1:
+                messagebox.showerror("Input Error", "Please enter a whole number ≥ 1 for forecast year.")
+                return
+            year_index = int(year_str)
 
-            # Set module variables
-            annual_report.window = window
-            annual_report.tree_info = tree_info
-            annual_report.tree_forecast = tree_forecast
-            annual_report.year_var = year_var
-            annual_report.forecasted_scores_dict = {}  # Initialize this dict
+            tree_info.delete(*tree_info.get_children())
+            tree_forecast.delete(*tree_forecast.get_children())
 
-            # Buttons with proper module functions
-            ttk.Button(window, text="Generate Report",
-                       command=annual_report.generate_report).grid(row=3, column=2, sticky=tk.W, padx=5)
-            ttk.Button(window, text="Edit Forecasted Score",
-                       command=annual_report.edit_forecast_popup).grid(row=4, column=2, sticky=tk.W, padx=5)
-            ttk.Button(window, text="Set Same Forecast for All",
-                       command=annual_report.apply_same_forecast_popup).grid(row=5, column=2, sticky=tk.W, padx=5)
+            for emp in records:
+                emp_id, name, grade, current_salary = emp
+                forecasted_score = forecasted_scores_dict.get(emp_id, 3)
+                forecasted_salary = current_salary * (1 + 0.02) ** year_index
+                last_year_salary = current_salary * (1 + 0.02) ** (year_index - 1) if year_index > 1 else current_salary
+                max_salary = grade_bands.get(grade, 0)
+                exceeds = "Yes" if forecasted_salary > max_salary else "No"
 
-            # Generate report on open
-            annual_report.generate_report()
+                tree_info.insert("", "end", values=(emp_id, name, grade, f"${current_salary:,.2f}"))
+                tree_forecast.insert("", "end", values=(
+                    forecasted_score, f"${forecasted_salary:,.2f}", f"${last_year_salary:,.2f}", exceeds))
+
+        def edit_forecast_popup():
+            popup = tk.Toplevel(window)
+            popup.title("Edit Forecasted Score")
+            popup.geometry("300x200")
+            tk.Label(popup, text="Select Employee ID:").pack(pady=5)
+            emp_ids = [str(emp[0]) for emp in records]
+            emp_var = tk.StringVar()
+            emp_menu = ttk.Combobox(popup, textvariable=emp_var, values=emp_ids, state="readonly")
+            emp_menu.pack()
+            tk.Label(popup, text="Enter New Forecasted Score (1-5):").pack(pady=5)
+            score_var = tk.StringVar()
+            tk.Entry(popup, textvariable=score_var).pack()
+
+            def save_edit():
+                try:
+                    emp_id = int(emp_var.get())
+                    score = int(score_var.get())
+                    if not (1 <= score <= 5):
+                        raise ValueError
+                    forecasted_scores_dict[emp_id] = score
+                    popup.destroy()
+                    generate_report()
+                except:
+                    messagebox.showerror("Input Error", "Please enter a valid score (1–5).")
+
+            tk.Button(popup, text="Save", command=save_edit).pack(pady=10)
+
+        def apply_same_forecast_popup():
+            popup = tk.Toplevel(window)
+            popup.title("Set Same Forecast Score")
+            popup.geometry("300x150")
+            tk.Label(popup, text="Enter Forecasted Score for All Employees (1–5):").pack(pady=10)
+            score_var = tk.StringVar()
+            tk.Entry(popup, textvariable=score_var).pack()
+
+            def set_all():
+                try:
+                    score = int(score_var.get())
+                    if not (1 <= score <= 5):
+                        raise ValueError
+                    for emp in records:
+                        forecasted_scores_dict[emp[0]] = score
+                    popup.destroy()
+                    generate_report()
+                except:
+                    messagebox.showerror("Input Error", "Please enter a valid score (1–5).")
+
+            tk.Button(popup, text="Apply to All", command=set_all).pack(pady=10)
+
+        # Buttons
+        ttk.Button(window, text="Generate Report", command=generate_report).grid(row=3, column=2, sticky="w", padx=5)
+        ttk.Button(window, text="Edit Forecasted Score", command=edit_forecast_popup).grid(row=4, column=2, sticky="w",
+                                                                                           padx=5)
+        ttk.Button(window, text="Set Same Forecast for All", command=apply_same_forecast_popup).grid(row=5, column=2,
+                                                                                                     sticky="w", padx=5)
+
+        generate_report()
 
     def open_help(self):
         print("Opening Help")  # Debug
@@ -356,8 +610,11 @@ class HRPerformanceEvaluatorApp:
             wraplength=350
         ).pack(pady=20)
 
-
 if __name__ == "__main__":
     root = tk.Tk()
+    ensure_employees_table_has_columns()
+    df = pd.read_csv("employee_export.csv")
+    update_employees_db_from_csv(df)
     app = HRPerformanceEvaluatorApp(root)
     root.mainloop()
+
