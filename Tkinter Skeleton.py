@@ -332,67 +332,7 @@ class HRPerformanceEvaluatorApp:
             performance_evaluation.display_records()
 
     def open_salary_forecast(self):
-        print("Opening Salary Forecast")  # Debug
-        employee_data, totals = HRPerformanceEvaluatorApp.salary_projection()
-
-        # Create a new window
-        window = tk.Toplevel(self.root)
-        window.title("Salary Forecast")
-        window.geometry("1100x600")
-        window.configure(bg="#f0f4f8")
-
-        # Title label
-        tk.Label(
-            window,
-            text="Employee Salary Forecast",
-            font="Helvetica 16 bold",
-            bg="#f0f4f8"
-        ).pack(pady=10)
-
-        # Table setup
-        columns = ["status", "id", "name", "grade", "year_0", "year_1", "year_2", "year_3", "year_4", "year_5"]
-        headers = ["Status", "ID", "Name", "Grade", "Year 0", "Year 1", "Year 2", "Year 3", "Year 4", "Year 5"]
-
-        tree = ttk.Treeview(window, columns=columns, show="headings", height=20)
-        tree.pack(padx=20, pady=10, fill="x")
-
-        for col, header in zip(columns, headers):
-            tree.heading(col, text=header)
-            tree.column(col, width=100, anchor=tk.CENTER)
-
-        # Insert data rows
-        for emp in employee_data:
-            row = emp[:4] + [f"${val:,.2f}" for val in emp[4:]]
-            tree.insert("", "end", values=row)
-
-        # Total per year
-        totals_frame = tk.Frame(window, bg="#f0f4f8")
-        totals_frame.pack(pady=5)
-        tk.Label(
-            totals_frame,
-            text="Total Salary per Year:",
-            font="Helvetica 11 bold",
-            bg="#f0f4f8"
-        ).grid(row=0, column=0, sticky="w", padx=10)
-
-        for i, total in enumerate(totals):
-            tk.Label(
-                totals_frame,
-                text=f"Year {i}: ${total:,.2f}",
-                bg="#f0f4f8"
-            ).grid(row=i + 1, column=0, sticky="w", padx=20)
-
-        # Footer note
-        tk.Label(
-            window,
-            text="*Note: Current salary is considered Year 0",
-            font="Helvetica 9 italic",
-            bg="#f0f4f8",
-            fg="#333333"
-        ).pack(pady=10, anchor="w", padx=20)
-
-    def open_band_limits(self):
-        print("Opening Band Limits")  # Debug
+        print("Opening salary forecast")  # Debug
         salary_proj = import_module("Salary_Projections")
         print("salary_proj =", salary_proj)  # Debug if import failed
 
@@ -449,6 +389,49 @@ class HRPerformanceEvaluatorApp:
 
         tk.Label(window, text="*Note: Current salary is considered Year 0", font="Helvetica 9 italic",
                  bg="#f0f4f8", fg="#333333").pack(pady=10, anchor="w", padx=20)
+
+    def open_band_limits(self):
+        print("Opening Band Limits")  # Debug
+
+        window = tk.Toplevel(self.root)
+        window.title("Salary Band Limits")
+        window.geometry("600x300")
+        window.configure(bg="#f0f4f8")
+
+        tk.Label(window, text="Salary Band Limits", font="Helvetica 16 bold", bg="#f0f4f8").pack(pady=10)
+
+        columns = ["grade", "min", "mid", "max"]
+        headers = ["Grade", "Minimum", "Midpoint", "Maximum"]
+
+        tree = ttk.Treeview(window, columns=columns, show="headings", height=10)
+        tree.pack(padx=20, pady=10, fill="x")
+
+        for col, header in zip(columns, headers):
+            tree.heading(col, text=header)
+            tree.column(col, width=120, anchor=tk.CENTER)
+
+        # Load static band data
+        grades_data = [
+            {"Grade": "112A", "Minimum": 32240, "Midpoint": 34600, "Maximum": 43700},
+            {"Grade": "113A", "Minimum": 32240, "Midpoint": 38000, "Maximum": 48000},
+            {"Grade": "114A", "Minimum": 32800, "Midpoint": 41900, "Maximum": 52500},
+            {"Grade": "115A", "Minimum": 34400, "Midpoint": 45900, "Maximum": 57600},
+            {"Grade": "116A", "Minimum": 38000, "Midpoint": 50600, "Maximum": 63700},
+            {"Grade": "117A", "Minimum": 41600, "Midpoint": 55500, "Maximum": 69700},
+        ]
+
+        for row in grades_data:
+            tree.insert("", "end", values=(
+            row["Grade"], f"${row['Minimum']:,.0f}", f"${row['Midpoint']:,.0f}", f"${row['Maximum']:,.0f}"))
+
+        # Footnote
+        tk.Label(
+            window,
+            text="*Note: Salary bands define acceptable pay ranges for each grade.",
+            font="Helvetica 9 italic",
+            bg="#f0f4f8",
+            fg="#333333"
+        ).pack(pady=10, anchor="w", padx=20)
 
     def open_generate_report(self):
         print("Opening Generate Report")
