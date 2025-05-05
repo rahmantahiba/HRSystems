@@ -60,7 +60,7 @@ def show_employee_form(parent, tree, employee=None, emp_id=None):
     """Popup to add or edit an employee record."""
     form = tk.Toplevel(parent)
     form.title("Add Employee" if employee is None else "Edit Employee")
-    form.geometry("450x450")
+    form.geometry("450x500")
     form.resizable(False, False)
 
     # --------------------------------------------------------------
