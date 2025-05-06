@@ -538,7 +538,7 @@ class HRPerformanceEvaluatorApp:
 
     def open_help(self):
         print("Opening Help")
-        pdf_path = "HR Manual.pdf"
+        pdf_path = "HR Manual.docx.pdf"
         try:
             if os.path.exists(pdf_path):
                 if sys.platform.startswith("win"):
